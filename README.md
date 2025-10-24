@@ -32,6 +32,8 @@ For Fedora/RHEL:
 sudo dnf install sane-backends sane-backends-drivers-scanners
 ```
 
+**See [SCANNER_SETUP.md](SCANNER_SETUP.md) for detailed setup instructions for all platforms.**
+
 ### macOS Installation
 
 ```bash
@@ -70,12 +72,16 @@ scanimage -L
 
 ## Usage
 
-1. Run the application:
+### GUI Application
+
+1. Run the GUI application:
 ```bash
 python scanner_app.py
+# or use the launcher script
+./run.sh
 ```
 
-2. Using the application:
+2. Using the GUI:
    - Click **"Refresh Scanners"** to detect available scanners
    - Select your Xerox D35 from the dropdown menu
    - Configure your preferred **Resolution** and **Scan Mode**
@@ -84,6 +90,32 @@ python scanner_app.py
    - Use **"Clear Scans"** to start over if needed
 
 3. Find your scanned PDFs in the `scans/` directory with timestamp-based filenames (e.g., `scan_20231024_153045.pdf`)
+
+### Command Line Interface (CLI)
+
+For automation or headless operation, use the CLI tool:
+
+1. List available scanners:
+```bash
+python scanner_cli.py --list
+```
+
+2. Scan pages:
+```bash
+# Scan 3 pages at 300 DPI in color mode
+python scanner_cli.py --device 0 --pages 3 --resolution 300 --mode Color
+
+# Scan 5 pages in grayscale
+python scanner_cli.py -d 0 -p 5 -m Gray -o my_document.pdf
+```
+
+3. CLI Options:
+   - `--list, -l`: List available scanners
+   - `--device, -d`: Scanner device number or name
+   - `--pages, -p`: Number of pages to scan (default: 1)
+   - `--resolution, -r`: Resolution in DPI (150/300/600, default: 300)
+   - `--mode, -m`: Scan mode (Color/Gray/Lineart, default: Color)
+   - `--output, -o`: Output PDF filename (optional)
 
 ## Configuration
 
@@ -128,10 +160,15 @@ Edit `/etc/sane.d/dll.conf` to ensure appropriate backends are enabled. For Xero
 
 ```
 D35-Scan-to-PDF/
-├── scanner_app.py       # Main application file
+├── scanner_app.py       # Main GUI application (Flet)
+├── scanner_cli.py       # Command-line interface
 ├── requirements.txt     # Python dependencies
 ├── .gitignore          # Git ignore rules
 ├── README.md           # This file
+├── run.sh              # Launcher script for GUI
+├── setup_check.py      # System requirements verification
+├── test_scanner_app.py # Unit tests
+├── config.example.ini  # Example configuration file
 └── scans/              # Output directory (created automatically)
 ```
 
