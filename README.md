@@ -1,50 +1,33 @@
 # D35-Scan-to-PDF
 
-A Python Flet-based GUI application for scanning documents using a Xerox D35 scanner and saving them as multi-page PDF files.
+A Python Flet-based GUI application for scanning documents using a Xerox D35 scanner and Apple's Image Capture, saving them as multi-page PDF files with timestamped filenames.
 
 ## Features
 
-- 🖨️ **Scanner Detection**: Automatically detects available SANE-compatible scanners
+- 🖨️ **Scanner Detection**: Uses Apple's Image Capture for seamless macOS scanner integration
 - 📄 **Multi-Page Scanning**: Scan multiple pages one at a time
 - 📑 **PDF Generation**: Combine all scanned pages into a single multi-page PDF
 - ⚙️ **Configurable Settings**: Adjust resolution (150/300/600 DPI) and scan mode (Color/Gray/Lineart)
 - 🎨 **Modern UI**: Clean and intuitive Flet-based graphical interface
-- 💾 **Organized Output**: Automatically saves PDFs with timestamps in a `scans/` directory
+- 💾 **Organized Output**: Automatically saves PDFs with timestamps as `Scan_YYYYMMDD_HHMMSS.pdf` in a `scans/` directory
+- 🍎 **macOS Native**: Uses Apple's Image Capture for better compatibility and reliability
 
 ## Requirements
 
 ### System Requirements
 
+- **macOS** (required for Image Capture integration)
 - Python 3.8 or higher
-- SANE (Scanner Access Now Easy) backend installed on your system
-- Xerox D35 scanner connected and configured
+- Apple's Image Capture (built into macOS)
+- Xerox D35 scanner connected via USB
 
-### Linux Installation
+### Why Image Capture?
 
-For Ubuntu/Debian:
-```bash
-sudo apt-get update
-sudo apt-get install sane sane-utils libsane-dev python3-dev
-```
-
-For Fedora/RHEL:
-```bash
-sudo dnf install sane-backends sane-backends-drivers-scanners
-```
-
-**See [SCANNER_SETUP.md](SCANNER_SETUP.md) for detailed setup instructions for all platforms.**
-
-### macOS Installation
-
-```bash
-brew install sane-backends
-```
-
-### Windows Installation
-
-Windows support for SANE is limited. Consider using:
-- WIA (Windows Image Acquisition) alternatives
-- Or run in WSL2 with USB passthrough
+This app has been updated to use Apple's native Image Capture instead of SANE because:
+- Better compatibility with modern macOS versions
+- More reliable scanner detection and communication
+- No need for complex SANE backend configuration
+- Leverages macOS's built-in scanner drivers
 
 ## Installation
 
@@ -57,7 +40,7 @@ cd D35-Scan-to-PDF
 2. Create a virtual environment (recommended):
 ```bash
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 ```
 
 3. Install Python dependencies:
@@ -65,9 +48,14 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Verify your scanner is detected by SANE:
+4. Verify Image Capture is available:
 ```bash
-scanimage -L
+which imagecapture
+```
+
+5. Test scanner detection:
+```bash
+imagecapture -list
 ```
 
 ## Usage
@@ -82,14 +70,14 @@ python scanner_app.py
 ```
 
 2. Using the GUI:
-   - Click **"Refresh Scanners"** to detect available scanners
-   - Select your Xerox D35 from the dropdown menu
+   - Click **"Refresh Scanners"** to detect available Image Capture compatible devices
+   - Select your scanner from the dropdown menu (or use "Auto-detect")
    - Configure your preferred **Resolution** and **Scan Mode**
-   - Click **"Scan Page"** to scan each page (repeat for multiple pages)
+   - Click **"Scan Page"** to scan each page using Image Capture (repeat for multiple pages)
    - Click **"Save as PDF"** to create a multi-page PDF file
    - Use **"Clear Scans"** to start over if needed
 
-3. Find your scanned PDFs in the `scans/` directory with timestamp-based filenames (e.g., `scan_20231024_153045.pdf`)
+3. Find your scanned PDFs in the `scans/` directory with timestamped filenames following the pattern `Scan_YYYYMMDD_HHMMSS.pdf` (e.g., `Scan_20231024_153045.pdf`)
 
 ### Command Line Interface (CLI)
 
@@ -103,19 +91,19 @@ python scanner_cli.py --list
 2. Scan pages:
 ```bash
 # Scan 3 pages at 300 DPI in color mode
-python scanner_cli.py --device 0 --pages 3 --resolution 300 --mode Color
+python scanner_cli.py --pages 3 --resolution 300 --mode Color
 
-# Scan 5 pages in grayscale
-python scanner_cli.py -d 0 -p 5 -m Gray -o my_document.pdf
+# Scan 5 pages in grayscale with custom output
+python scanner_cli.py -p 5 -m Gray -o my_document.pdf
 ```
 
 3. CLI Options:
    - `--list, -l`: List available scanners
-   - `--device, -d`: Scanner device number or name
+   - `--device, -d`: Scanner device name (default: auto-detect)
    - `--pages, -p`: Number of pages to scan (default: 1)
    - `--resolution, -r`: Resolution in DPI (150/300/600, default: 300)
    - `--mode, -m`: Scan mode (Color/Gray/Lineart, default: Color)
-   - `--output, -o`: Output PDF filename (optional)
+   - `--output, -o`: Output PDF filename (optional, defaults to `Scan_TIMESTAMP.pdf`)
 
 ## Configuration
 
@@ -123,38 +111,39 @@ The application uses the following default settings:
 - **Resolution**: 300 DPI (adjustable to 150 or 600 DPI)
 - **Scan Mode**: Color (adjustable to Gray or Lineart)
 - **Output Directory**: `./scans/`
+- **Filename Pattern**: `Scan_YYYYMMDD_HHMMSS.pdf`
 
 ## Troubleshooting
 
 ### Scanner Not Detected
 
-1. Verify scanner is connected and powered on
-2. Check SANE can detect it:
+1. Verify scanner is connected via USB and powered on
+2. Check Image Capture can detect it:
    ```bash
-   scanimage -L
+   imagecapture -list
    ```
-3. You may need to configure SANE backend for your specific scanner model
-4. Check scanner permissions:
-   ```bash
-   ls -l /dev/bus/usb/*/*
-   ```
-   
+3. Try opening the macOS "Image Capture" app to verify the scanner works
+4. Ensure the scanner is not being used by another application
+
 ### Permission Issues
 
-If you get permission errors, add your user to the scanner group:
-```bash
-sudo usermod -a -G scanner $USER
-# Or on some systems:
-sudo usermod -a -G lp $USER
-```
+Image Capture should handle permissions automatically, but if you encounter issues:
+1. Check System Preferences > Security & Privacy > Privacy > Camera (if applicable)
+2. Make sure the Terminal app (or your Python environment) has necessary permissions
 
-Then log out and back in for changes to take effect.
+### Image Capture Command Not Found
 
-### SANE Configuration
+If `imagecapture` command is not available:
+1. Ensure you're running on macOS
+2. The command should be available at `/usr/bin/imagecapture`
+3. Try using the full path: `/usr/bin/imagecapture -list`
 
-Edit `/etc/sane.d/dll.conf` to ensure appropriate backends are enabled. For Xerox scanners, you might need:
-- `xerox_mfp`
-- `net` (for network scanners)
+### Alternative: Manual Image Capture Integration
+
+If the command-line `imagecapture` tool doesn't work, you can:
+1. Use the macOS Image Capture app to scan to a folder
+2. Use the app's "Watch Folder" feature to automatically process new scans
+3. Set the watched folder to your temp directory
 
 ## Project Structure
 
@@ -175,9 +164,16 @@ D35-Scan-to-PDF/
 ## Dependencies
 
 - **flet**: Modern Python UI framework
-- **python-sane**: Python bindings for SANE scanner interface
 - **Pillow**: Image processing library
 - **reportlab**: PDF generation library
+- **Image Capture**: macOS built-in scanning framework (replaces SANE)
+
+## Platform Support
+
+- **macOS**: Full support (primary platform)
+- **Linux/Windows**: Not supported in current version due to Image Capture dependency
+
+*Note: For Linux/Windows support, the previous SANE-based version can be found in the git history.*
 
 ## License
 
@@ -194,5 +190,5 @@ SummittDweller
 ## Acknowledgments
 
 - Built with [Flet](https://flet.dev/) - Flutter apps in Python
-- Uses [SANE](http://www.sane-project.org/) for scanner access
+- Uses Apple's Image Capture for scanner access on macOS
 - PDF generation with [ReportLab](https://www.reportlab.com/)

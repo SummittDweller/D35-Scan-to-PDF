@@ -1,11 +1,11 @@
 """
 D35 Scanner to PDF Application
-A Flet-based GUI application for scanning documents using a Xerox D35 scanner
-and saving them as multi-page PDF files.
+A Flet-based GUI application for scanning documents using Apple's Image Capture
+and saving them as multi-page PDF files with timestamped filenames.
 """
 
 import flet as ft
-import sane
+import subprocess
 from PIL import Image
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -14,21 +14,26 @@ import os
 import tempfile
 from datetime import datetime
 import traceback
+import time
+import glob
+import shutil
 
 
 class ScannerApp:
-    """Main application class for the D35 Scanner to PDF app."""
+    """Main application class for the D35 Scanner to PDF app using Image Capture."""
     
     def __init__(self, page: ft.Page):
         self.page = page
-        self.page.title = "D35 Scanner to PDF"
+        self.page.title = "D35 Scanner to PDF (Image Capture)"
         self.page.window_width = 600
         self.page.window_height = 700
         self.page.padding = 20
         
-        self.scanner = None
+        self.scanner_devices = []
+        self.selected_device = None
         self.scanned_images = []
         self.scan_dir = None
+        self.scan_counter = 0
         
         # UI Components
         self.status_text = ft.Text("Ready", size=16, color=ft.colors.GREEN)
@@ -94,7 +99,7 @@ class ScannerApp:
         """Build the user interface."""
         self.page.add(
             ft.Column([
-                ft.Text("Xerox D35 Scanner to PDF", size=24, weight=ft.FontWeight.BOLD),
+                ft.Text("D35 Scanner to PDF (Image Capture)", size=24, weight=ft.FontWeight.BOLD),
                 ft.Divider(),
                 
                 # Status section
@@ -139,11 +144,25 @@ class ScannerApp:
                 ft.Container(
                     content=ft.Column([
                         ft.Text("Instructions:", weight=ft.FontWeight.BOLD),
-                        ft.Text("1. Select your Xerox D35 scanner from the dropdown"),
-                        ft.Text("2. Configure resolution and scan mode"),
-                        ft.Text("3. Click 'Scan Page' to scan each page"),
-                        ft.Text("4. Repeat step 3 for each page you want to scan"),
-                        ft.Text("5. Click 'Save as PDF' to create the multi-page PDF"),
+                        ft.Text("1. Connect your D35 scanner and ensure it's powered on"),
+                        ft.Text("2. Click 'Refresh Scanners' to detect available scanning methods"),
+                        ft.Text("3. Select a scanning option from the dropdown:"),
+                        ft.Text("   • AppleScript: Automated Image Capture control"),
+                        ft.Text("   • Manual Import: Scan with Image Capture app, save to Desktop"),
+                        ft.Text("4. Configure resolution and scan mode"),
+                        ft.Text("5. Click 'Scan Page' for each page you want to scan"),
+                        ft.Text("6. For Manual Import: Use Image Capture app to scan and save to Desktop"),
+                        ft.Text("7. Click 'Save as PDF' to create a timestamped PDF file"),
+                        ft.Text(""),
+                        ft.Text("Note: This app works with Apple's Image Capture system.", 
+                               style=ft.TextThemeStyle.BODY_SMALL, 
+                               color=ft.colors.ON_SURFACE_VARIANT),
+                        ft.Text("PDFs are saved as 'Scan_YYYYMMDD_HHMMSS.pdf' in the 'scans' folder.",
+                               style=ft.TextThemeStyle.BODY_SMALL, 
+                               color=ft.colors.ON_SURFACE_VARIANT),
+                        ft.Text("For best results with D35, use the Manual Import method.",
+                               style=ft.TextThemeStyle.BODY_SMALL, 
+                               color=ft.colors.ON_SURFACE_VARIANT),
                     ]),
                     padding=10,
                     border_radius=5,
@@ -159,25 +178,72 @@ class ScannerApp:
         self.page.update()
     
     def refresh_scanners(self, e):
-        """Refresh the list of available scanners."""
+        """Refresh the list of available scanners using macOS Image Capture."""
         try:
-            self.update_status("Scanning for devices...", ft.colors.BLUE)
-            sane.init()
-            devices = sane.get_devices()
+            self.update_status("Checking for Image Capture support...", ft.colors.BLUE)
             
             self.scanner_dropdown.options.clear()
+            self.scanner_devices.clear()
             
-            if devices:
-                for device in devices:
-                    # device is a tuple: (name, vendor, model, type)
-                    device_name = f"{device[1]} {device[2]} ({device[0]})"
-                    self.scanner_dropdown.options.append(
-                        ft.dropdown.Option(key=device[0], text=device_name)
-                    )
-                self.update_status(f"Found {len(devices)} scanner(s)", ft.colors.GREEN)
-            else:
-                self.update_status("No scanners found", ft.colors.ORANGE)
+            # Check for imagecapture command first
+            ic_result = subprocess.run(['which', 'imagecapture'], capture_output=True, text=True)
             
+            if ic_result.returncode == 0:
+                # imagecapture command is available
+                try:
+                    ic_list_result = subprocess.run([
+                        'imagecapture', '-list'
+                    ], capture_output=True, text=True, timeout=5)
+                    
+                    if ic_list_result.returncode == 0 and ic_list_result.stdout.strip():
+                        lines = ic_list_result.stdout.strip().split('\n')
+                        for line in lines:
+                            if line.strip() and not line.startswith('Devices:'):
+                                device_name = line.strip()
+                                device_entry = {
+                                    'id': f'ic_{device_name.replace(" ", "_")}',
+                                    'name': f'Image Capture: {device_name}',
+                                    'type': 'scanner'
+                                }
+                                self.scanner_devices.append(device_entry)
+                                self.scanner_dropdown.options.append(
+                                    ft.dropdown.Option(
+                                        key=device_entry['id'], 
+                                        text=device_entry['name']
+                                    )
+                                )
+                except subprocess.TimeoutExpired:
+                    pass  # Fall back to generic option
+            
+            # Always add a generic option that uses AppleScript as fallback
+            device_entry = {
+                'id': 'image_capture_applescript',
+                'name': 'Image Capture (AppleScript)',
+                'type': 'scanner'
+            }
+            self.scanner_devices.append(device_entry)
+            self.scanner_dropdown.options.append(
+                ft.dropdown.Option(
+                    key=device_entry['id'], 
+                    text=device_entry['name']
+                )
+            )
+            
+            # Add manual option
+            device_entry = {
+                'id': 'manual_import',
+                'name': 'Manual Import (from Desktop)',
+                'type': 'manual'
+            }
+            self.scanner_devices.append(device_entry)
+            self.scanner_dropdown.options.append(
+                ft.dropdown.Option(
+                    key=device_entry['id'], 
+                    text=device_entry['name']
+                )
+            )
+            
+            self.update_status(f"Found {len(self.scanner_devices)} scanning option(s)", ft.colors.GREEN)
             self.page.update()
             
         except Exception as ex:
@@ -188,73 +254,74 @@ class ScannerApp:
         """Handle scanner selection."""
         if self.scanner_dropdown.value:
             try:
-                # Close previous scanner if open
-                if self.scanner:
-                    self.scanner.close()
+                # Find the selected device
+                self.selected_device = None
+                for device in self.scanner_devices:
+                    if device['id'] == self.scanner_dropdown.value:
+                        self.selected_device = device
+                        break
                 
-                # Open the selected scanner
-                self.scanner = sane.open(self.scanner_dropdown.value)
-                
-                # Try to set some basic options if available
-                try:
-                    # Set resolution
-                    if hasattr(self.scanner, 'resolution'):
-                        self.scanner.resolution = int(self.resolution_dropdown.value)
-                except:
-                    pass
-                
-                self.scan_btn.disabled = False
-                self.update_status("Scanner ready", ft.colors.GREEN)
-                self.page.update()
+                if self.selected_device:
+                    self.scan_btn.disabled = False
+                    self.update_status("Scanner ready - using Image Capture", ft.colors.GREEN)
+                    self.page.update()
+                else:
+                    self.scan_btn.disabled = True
+                    self.update_status("Invalid scanner selection", ft.colors.RED)
+                    self.page.update()
                 
             except Exception as ex:
-                self.update_status(f"Error opening scanner: {str(ex)}", ft.colors.RED)
+                self.update_status(f"Error selecting scanner: {str(ex)}", ft.colors.RED)
                 print(traceback.format_exc())
                 self.scan_btn.disabled = True
                 self.page.update()
     
     def scan_page(self, e):
-        """Scan a single page."""
-        if not self.scanner:
+        """Scan a single page using the selected method."""
+        if not self.selected_device:
             self.update_status("No scanner selected", ft.colors.RED)
             return
         
         try:
             self.progress_bar.visible = True
             self.scan_btn.disabled = True
-            self.update_status("Scanning...", ft.colors.BLUE)
+            self.update_status("Initiating scan...", ft.colors.BLUE)
             self.page.update()
             
             # Create temp directory if needed
             if not self.scan_dir:
                 self.scan_dir = tempfile.mkdtemp(prefix="d35_scan_")
             
-            # Configure scanner options
-            try:
-                if hasattr(self.scanner, 'resolution'):
-                    self.scanner.resolution = int(self.resolution_dropdown.value)
-                
-                if hasattr(self.scanner, 'mode'):
-                    mode_map = {
-                        "Color": "Color",
-                        "Gray": "Gray",
-                        "Lineart": "Lineart"
-                    }
-                    self.scanner.mode = mode_map.get(self.mode_dropdown.value, "Color")
-            except Exception as ex:
-                print(f"Warning: Could not set scanner options: {ex}")
+            # Generate timestamped filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             
-            # Perform the scan
-            self.scanner.start()
-            image = self.scanner.snap()
+            scanned_file_path = None
             
-            # Save the scanned image
-            image_path = os.path.join(
-                self.scan_dir,
-                f"scan_{len(self.scanned_images):03d}.png"
-            )
-            image.save(image_path)
-            self.scanned_images.append(image_path)
+            if self.selected_device['id'] == 'manual_import':
+                scanned_file_path = self.handle_manual_import(timestamp)
+            elif self.selected_device['id'] == 'image_capture_applescript':
+                scanned_file_path = self.handle_applescript_scan(timestamp)
+            elif self.selected_device['id'].startswith('ic_'):
+                scanned_file_path = self.handle_imagecapture_cmd(timestamp)
+            else:
+                raise Exception(f"Unknown scanner type: {self.selected_device['id']}")
+            
+            if not scanned_file_path:
+                raise Exception("No scanned file was obtained")
+            
+            # Convert to PNG and add to list
+            png_path = os.path.join(self.scan_dir, f"scan_{len(self.scanned_images):03d}.png")
+            
+            if not scanned_file_path.lower().endswith('.png'):
+                with Image.open(scanned_file_path) as img:
+                    img.save(png_path)
+                if scanned_file_path != png_path and os.path.exists(scanned_file_path):
+                    os.remove(scanned_file_path)
+            else:
+                if scanned_file_path != png_path:
+                    os.rename(scanned_file_path, png_path)
+            
+            self.scanned_images.append(png_path)
             
             # Update UI
             self.scan_count_text.value = f"Scanned pages: {len(self.scanned_images)}"
@@ -271,8 +338,110 @@ class ScannerApp:
             self.scan_btn.disabled = False
             self.page.update()
     
+    def handle_manual_import(self, timestamp):
+        """Handle manual import from Desktop."""
+        self.update_status("Please scan with Image Capture app and save to Desktop...", ft.colors.BLUE)
+        self.page.update()
+        
+        # Look for new files on Desktop
+        desktop_path = os.path.expanduser("~/Desktop")
+        
+        # Get initial file list
+        initial_files = set(os.listdir(desktop_path))
+        
+        self.update_status("Waiting for new scan file on Desktop (30 seconds)...", ft.colors.ORANGE)
+        self.page.update()
+        
+        # Wait for new file to appear
+        for i in range(30):  # Wait up to 30 seconds
+            time.sleep(1)
+            current_files = set(os.listdir(desktop_path))
+            new_files = current_files - initial_files
+            
+            # Look for image files
+            for new_file in new_files:
+                if new_file.lower().endswith(('.png', '.jpg', '.jpeg', '.pdf', '.tiff', '.tif')):
+                    source_path = os.path.join(desktop_path, new_file)
+                    dest_path = os.path.join(self.scan_dir, f"temp_{timestamp}.{new_file.split('.')[-1]}")
+                    
+                    # Copy the file
+                    shutil.copy2(source_path, dest_path)
+                    
+                    self.update_status(f"Found scan: {new_file}", ft.colors.GREEN)
+                    return dest_path
+        
+        raise Exception("No new scan file found on Desktop within 30 seconds")
+    
+    def handle_applescript_scan(self, timestamp):
+        """Handle scanning using AppleScript to control Image Capture."""
+        applescript = '''
+        tell application "Image Capture"
+            activate
+            delay 2
+            try
+                scan
+                delay 3
+                return "scan_initiated"
+            on error errMsg
+                return "error: " & errMsg
+            end try
+        end tell
+        '''
+        
+        self.update_status("Opening Image Capture app...", ft.colors.BLUE)
+        self.page.update()
+        
+        try:
+            result = subprocess.run([
+                'osascript', '-e', applescript
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0 and "scan_initiated" in result.stdout:
+                # After AppleScript, fall back to manual detection
+                return self.handle_manual_import(timestamp)
+            else:
+                self.update_status("AppleScript failed, please use Image Capture manually", ft.colors.ORANGE)
+                return self.handle_manual_import(timestamp)
+                
+        except subprocess.TimeoutExpired:
+            self.update_status("AppleScript timeout, please use Image Capture manually", ft.colors.ORANGE)
+            return self.handle_manual_import(timestamp)
+    
+    def handle_imagecapture_cmd(self, timestamp):
+        """Handle scanning using imagecapture command (if available)."""
+        temp_filename = f"scan_{timestamp}"
+        
+        cmd = [
+            'imagecapture',
+            '-path', self.scan_dir,
+            '-name', temp_filename,
+            '-type', 'public.jpeg',
+            '-dpi', str(int(self.resolution_dropdown.value))
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode != 0:
+            raise Exception(f"Image Capture command failed: {result.stderr}")
+        
+        # Find the scanned file
+        pattern = os.path.join(self.scan_dir, f"{temp_filename}*")
+        matching_files = glob.glob(pattern)
+        
+        if not matching_files:
+            # Try alternative patterns
+            pattern = os.path.join(self.scan_dir, "*.jp*")
+            all_files = glob.glob(pattern)
+            if all_files:
+                matching_files = [max(all_files, key=os.path.getmtime)]
+        
+        if not matching_files:
+            raise Exception("No scanned image file found")
+        
+        return matching_files[0]
+    
     def save_as_pdf(self, e):
-        """Save all scanned pages as a multi-page PDF."""
+        """Save all scanned pages as a multi-page PDF with timestamped filename."""
         if not self.scanned_images:
             self.update_status("No scanned pages to save", ft.colors.ORANGE)
             return
@@ -290,9 +459,9 @@ class ScannerApp:
             )
             os.makedirs(output_dir, exist_ok=True)
             
-            # Generate filename with timestamp
+            # Generate filename with timestamp (replacing "Scan.pdf" with timestamped version)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            pdf_filename = os.path.join(output_dir, f"scan_{timestamp}.pdf")
+            pdf_filename = os.path.join(output_dir, f"Scan_{timestamp}.pdf")
             
             # Create PDF
             first_image = Image.open(self.scanned_images[0])
@@ -319,7 +488,7 @@ class ScannerApp:
             c.save()
             
             self.update_status(
-                f"PDF saved: {pdf_filename} ({len(self.scanned_images)} pages)",
+                f"PDF saved: Scan_{timestamp}.pdf ({len(self.scanned_images)} pages)",
                 ft.colors.GREEN
             )
             

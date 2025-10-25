@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 D35 Scanner to PDF - Command Line Interface
-Simple CLI tool for scanning documents without the GUI
+Simple CLI tool for scanning documents using Apple's Image Capture (no GUI)
 """
 
-import sane
+import subprocess
 from PIL import Image
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -14,43 +14,60 @@ import tempfile
 from datetime import datetime
 import argparse
 import sys
+import glob
+import time
 
 
 def list_scanners():
-    """List all available SANE scanners."""
-    print("Initializing SANE...")
-    sane.init()
-    devices = sane.get_devices()
+    """List all available Image Capture compatible scanners."""
+    print("Checking for Image Capture support...")
     
-    if not devices:
-        print("No scanners found!")
+    # Check if imagecapture command is available
+    ic_result = subprocess.run(['which', 'imagecapture'], capture_output=True, text=True)
+    
+    if ic_result.returncode != 0:
+        print("Error: Image Capture command not found!")
+        print("Make sure you're running this on macOS with Image Capture installed.")
         return []
     
-    print(f"\nFound {len(devices)} scanner(s):\n")
-    for i, device in enumerate(devices):
-        print(f"  [{i}] {device[1]} {device[2]}")
-        print(f"      Device: {device[0]}")
-        print(f"      Type: {device[3]}\n")
+    print("Image Capture is available.")
     
-    return devices
+    # Try to list devices
+    try:
+        ic_list_result = subprocess.run([
+            'imagecapture', '-list'
+        ], capture_output=True, text=True, timeout=10)
+        
+        devices = []
+        if ic_list_result.returncode == 0 and ic_list_result.stdout.strip():
+            lines = ic_list_result.stdout.strip().split('\n')
+            print(f"\nFound scanner devices:\n")
+            for i, line in enumerate(lines):
+                if line.strip() and not line.startswith('Devices:'):
+                    device_name = line.strip()
+                    devices.append(device_name)
+                    print(f"  [{i}] {device_name}")
+        else:
+            print("No specific devices listed, but Image Capture should auto-detect connected scanners.")
+            devices = ["Auto-detect"]
+            print("  [0] Auto-detect (Image Capture will find connected scanners)")
+        
+        return devices
+        
+    except subprocess.TimeoutExpired:
+        print("Timeout while listing devices, but Image Capture should still work.")
+        return ["Auto-detect"]
+    except Exception as e:
+        print(f"Error listing devices: {e}")
+        return []
 
 
 def scan_pages(scanner_device, num_pages, resolution=300, mode="Color"):
-    """Scan multiple pages."""
-    print(f"Opening scanner: {scanner_device}")
-    scanner = sane.open(scanner_device)
-    
-    # Set scanner options
-    try:
-        if hasattr(scanner, 'resolution'):
-            scanner.resolution = resolution
-            print(f"Resolution set to {resolution} DPI")
-        
-        if hasattr(scanner, 'mode'):
-            scanner.mode = mode
-            print(f"Scan mode set to {mode}")
-    except Exception as e:
-        print(f"Warning: Could not set all scanner options: {e}")
+    """Scan multiple pages using Image Capture."""
+    print(f"Using Image Capture for scanning")
+    print(f"Scanner: {scanner_device}")
+    print(f"Resolution: {resolution} DPI")
+    print(f"Mode: {mode}")
     
     # Create temporary directory for scans
     temp_dir = tempfile.mkdtemp(prefix="d35_scan_")
@@ -63,22 +80,63 @@ def scan_pages(scanner_device, num_pages, resolution=300, mode="Color"):
         input("Press ENTER when ready to scan (or Ctrl+C to cancel)...")
         
         try:
-            print("Scanning...")
-            scanner.start()
-            image = scanner.snap()
+            print("Scanning with Image Capture...")
             
-            # Save the image
-            image_path = os.path.join(temp_dir, f"scan_{page_num:03d}.png")
-            image.save(image_path)
-            scanned_images.append(image_path)
+            # Generate timestamped filename for this scan
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            temp_filename = f"page_{page_num:03d}_{timestamp}"
             
+            # Use imagecapture command to scan
+            cmd = [
+                'imagecapture',
+                '-path', temp_dir,
+                '-name', temp_filename,
+                '-type', 'public.jpeg',  # Use JPEG for better compatibility
+                '-dpi', str(resolution)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                print(f"✗ Error scanning page {page_num}: {result.stderr}")
+                continue
+            
+            # Find the scanned file (imagecapture might have added extension)
+            pattern = os.path.join(temp_dir, f"{temp_filename}*")
+            matching_files = glob.glob(pattern)
+            
+            if not matching_files:
+                # Try to find any recently created files
+                all_files = glob.glob(os.path.join(temp_dir, "*"))
+                if all_files:
+                    # Get the most recently modified file
+                    matching_files = [max(all_files, key=os.path.getmtime)]
+            
+            if not matching_files:
+                print(f"✗ No scanned file found for page {page_num}")
+                continue
+            
+            image_path = matching_files[0]
+            
+            # Convert to PNG if needed and rename consistently
+            png_path = os.path.join(temp_dir, f"scan_{page_num:03d}.png")
+            
+            if not image_path.lower().endswith('.png'):
+                with Image.open(image_path) as img:
+                    img.save(png_path)
+                os.remove(image_path)
+            else:
+                os.rename(image_path, png_path)
+            
+            scanned_images.append(png_path)
             print(f"✓ Page {page_num} scanned successfully")
             
+        except subprocess.TimeoutExpired:
+            print(f"✗ Scan timeout for page {page_num}")
+            break
         except Exception as e:
             print(f"✗ Error scanning page {page_num}: {e}")
             break
-    
-    scanner.close()
     
     return scanned_images, temp_dir
 
@@ -140,7 +198,7 @@ def cleanup_temp_files(temp_dir, images):
 def main():
     """Main CLI function."""
     parser = argparse.ArgumentParser(
-        description="D35 Scanner to PDF - Command Line Interface",
+        description="D35 Scanner to PDF - Command Line Interface (Image Capture)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -148,10 +206,10 @@ Examples:
   %(prog)s --list
   
   # Scan 3 pages at 300 DPI
-  %(prog)s --device 0 --pages 3 --resolution 300
+  %(prog)s --pages 3 --resolution 300
   
-  # Scan in grayscale mode
-  %(prog)s -d 0 -p 5 -m Gray
+  # Scan in grayscale mode  
+  %(prog)s -p 5 -m Gray
         """
     )
     
@@ -164,7 +222,8 @@ Examples:
     parser.add_argument(
         '--device', '-d',
         type=str,
-        help='Scanner device number or name (use --list to see available devices)'
+        default='auto',
+        help='Scanner device name (use --list to see available devices, default: auto-detect)'
     )
     
     parser.add_argument(
@@ -193,48 +252,22 @@ Examples:
     parser.add_argument(
         '--output', '-o',
         type=str,
-        help='Output PDF filename (default: scan_TIMESTAMP.pdf in scans/ directory)'
+        help='Output PDF filename (default: Scan_TIMESTAMP.pdf in scans/ directory)'
     )
     
     args = parser.parse_args()
     
-    # Initialize SANE
-    try:
-        sane.init()
-    except Exception as e:
-        print(f"Error initializing SANE: {e}")
-        print("Make sure SANE is installed and you have permission to access scanners")
+    # Check Image Capture availability
+    ic_result = subprocess.run(['which', 'imagecapture'], capture_output=True, text=True)
+    if ic_result.returncode != 0:
+        print("Error: Image Capture command not found!")
+        print("Make sure you're running this on macOS with Image Capture installed.")
         return 1
     
     # List scanners
     if args.list:
         list_scanners()
         return 0
-    
-    # Validate device argument
-    if not args.device:
-        print("Error: --device is required (use --list to see available devices)")
-        parser.print_help()
-        return 1
-    
-    # Get available devices
-    devices = sane.get_devices()
-    if not devices:
-        print("No scanners found!")
-        return 1
-    
-    # Select device
-    scanner_device = None
-    if args.device.isdigit():
-        device_idx = int(args.device)
-        if 0 <= device_idx < len(devices):
-            scanner_device = devices[device_idx][0]
-        else:
-            print(f"Error: Invalid device number {device_idx}")
-            list_scanners()
-            return 1
-    else:
-        scanner_device = args.device
     
     # Determine output filename
     if args.output:
@@ -244,14 +277,14 @@ Examples:
         output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans")
         os.makedirs(output_dir, exist_ok=True)
         
-        # Generate filename with timestamp
+        # Generate filename with timestamp (matching Image Capture's "Scan.pdf" but with timestamp)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = os.path.join(output_dir, f"scan_{timestamp}.pdf")
+        output_file = os.path.join(output_dir, f"Scan_{timestamp}.pdf")
     
     print("\n" + "="*60)
-    print("D35 Scanner to PDF - CLI")
+    print("D35 Scanner to PDF - CLI (Image Capture)")
     print("="*60)
-    print(f"Scanner: {scanner_device}")
+    print(f"Scanner: {args.device}")
     print(f"Pages: {args.pages}")
     print(f"Resolution: {args.resolution} DPI")
     print(f"Mode: {args.mode}")
@@ -261,7 +294,7 @@ Examples:
     # Scan pages
     try:
         images, temp_dir = scan_pages(
-            scanner_device,
+            args.device,
             args.pages,
             args.resolution,
             args.mode
